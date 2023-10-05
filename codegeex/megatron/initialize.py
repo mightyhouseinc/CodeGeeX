@@ -152,9 +152,7 @@ def _compile_dependencies():
     if torch.distributed.get_rank() == 0:
         start_time = time.time()
         print("> compiling and loading fused kernels ...", flush=True)
-        torch.distributed.barrier()
-    else:
-        torch.distributed.barrier()
+    torch.distributed.barrier()
     # Simple barrier to make sure all ranks have passed the
     # compilation phase successfully before moving on to the
     # rest of the program. We think this might ensure that
@@ -245,7 +243,7 @@ def _initialize_distributed():
         init_method = "tcp://"
         master_ip = os.getenv("MASTER_ADDR", "localhost")
         master_port = os.getenv("MASTER_PORT", "6000")
-        init_method += master_ip + ":" + master_port
+        init_method += f"{master_ip}:{master_port}"
         print(
             f"  > (rank={args.rank}) initializing process group: "
             f"world_size={args.world_size} "
@@ -281,8 +279,7 @@ def _initialize_distributed():
 
 def _init_autoresume():
     """Set autoresume start time."""
-    autoresume = get_adlr_autoresume()
-    if autoresume:
+    if autoresume := get_adlr_autoresume():
         torch.distributed.barrier()
         autoresume.init()
         torch.distributed.barrier()
@@ -290,23 +287,21 @@ def _init_autoresume():
 
 def _set_random_seed(seed_):
     """Set random seed for reproducability."""
-    if seed_ is not None and seed_ > 0:
-        # Ensure that different pipeline MP stages get different seeds.
-        seed = seed_ + (100 * mpu.get_pipeline_model_parallel_rank())
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.device_count() > 0:
-            mpu.model_parallel_cuda_manual_seed(seed)
-    else:
-        raise ValueError("Seed ({}) should be a positive integer.".format(seed))
+    if seed_ is None or seed_ <= 0:
+        raise ValueError(f"Seed ({seed}) should be a positive integer.")
+    # Ensure that different pipeline MP stages get different seeds.
+    seed = seed_ + (100 * mpu.get_pipeline_model_parallel_rank())
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.device_count() > 0:
+        mpu.model_parallel_cuda_manual_seed(seed)
 
 
 def write_args_to_tensorboard():
     """Write arguments to tensorboard."""
     args = get_args()
-    writer = get_tensorboard_writer()
-    if writer:
+    if writer := get_tensorboard_writer():
         for arg in vars(args):
             writer.add_text(arg, str(getattr(args, arg)), global_step=args.iteration)
 

@@ -31,13 +31,13 @@ from codegeex.megatron.model import Float16Module
 def get_forward_backward_func():
     args = get_args()
     if mpu.get_pipeline_model_parallel_world_size() > 1:
-        if args.virtual_pipeline_model_parallel_size is not None:
-            forward_backward_func = forward_backward_pipelining_with_interleaving
-        else:
-            forward_backward_func = forward_backward_pipelining_without_interleaving
+        return (
+            forward_backward_pipelining_with_interleaving
+            if args.virtual_pipeline_model_parallel_size is not None
+            else forward_backward_pipelining_without_interleaving
+        )
     else:
-        forward_backward_func = forward_backward_no_pipelining
-    return forward_backward_func
+        return forward_backward_no_pipelining
 
 
 def forward_step(forward_step_func, data_iterator, model, input_tensor, losses_reduced):
@@ -99,11 +99,7 @@ def backward_step(
             output_tensor = optimizer.scale_loss(output_tensor)
         torch.autograd.backward(output_tensor, grad_tensors=output_tensor_grad)
 
-    # Collect the grad of the input_tensor.
-    input_tensor_grad = None
-    if input_tensor is not None:
-        input_tensor_grad = input_tensor.grad
-
+    input_tensor_grad = input_tensor.grad if input_tensor is not None else None
     timers("backward-compute").stop()
 
     return input_tensor_grad
@@ -139,7 +135,7 @@ def forward_backward_no_pipelining(
     losses_reduced = []
     input_tensor, output_tensor_grad = None, None
     with context_handler():
-        for i in range(get_num_microbatches() - 1):
+        for _ in range(get_num_microbatches() - 1):
             # print_rank_0("====> start of microstep {i}")
             # print_rank_0("====> forward")
             output_tensor = forward_step(
@@ -150,8 +146,6 @@ def forward_backward_no_pipelining(
                 backward_step(
                     optimizer, input_tensor, output_tensor, output_tensor_grad, model
                 )
-            # print_rank_0("====> end of microstep {i}")
-
     if args.deepspeed:
         model.set_gradient_accumulation_boundary(True)
 
@@ -440,7 +434,7 @@ def forward_backward_pipelining_without_interleaving(
     losses_reduced = []
 
     # Run warmup forward passes.
-    for i in range(num_warmup_microbatches):
+    for _ in range(num_warmup_microbatches):
         input_tensor = p2p_communication.recv_forward(timers)
         output_tensor = forward_step(
             forward_step_func, data_iterator, model, input_tensor, losses_reduced
@@ -495,7 +489,7 @@ def forward_backward_pipelining_without_interleaving(
 
     # Run cooldown backward passes.
     if not forward_only:
-        for i in range(num_warmup_microbatches):
+        for _ in range(num_warmup_microbatches):
             input_tensor = input_tensors.pop(0)
             output_tensor = output_tensors.pop(0)
 
